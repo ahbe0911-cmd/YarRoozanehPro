@@ -98,7 +98,10 @@ data class TunnelConfig(
             fun int(key: String, fallback: Int) = (settings[key] as? Number)?.toInt() ?: fallback
 
             return TunnelConfig(
-                core = str("core", "aether"),
+                // Instagram edition always uses the bundled Psiphon automatic
+                // transport. This avoids a persisted WARP/MASQUE selection on
+                // networks where direct WARP handshakes are blocked.
+                core = "psiphon",
                 psiphonCountry = str("psiphonCountry"),
                 psiphonMode = str("psiphonMode", "auto"),
                 psiphonCdnIps = str("psiphonCdnIps"),
