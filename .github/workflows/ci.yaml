@@ -96,7 +96,7 @@ jobs:
           echo "psiphon fork at $sha"
 
       - name: Set up JDK
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           java-version: "17"
           distribution: "zulu"
