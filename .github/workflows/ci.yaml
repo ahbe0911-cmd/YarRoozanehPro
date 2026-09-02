@@ -32,7 +32,7 @@ jobs:
     name: Analyze and test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -76,12 +76,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout with the core and hev-socks5-tunnel
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Checkout Psiphon core (fork with udpgw support)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: CluvexStudio/psiphon-tunnel-core
           ref: ${{ env.PSIPHON_REF }}
@@ -209,12 +209,12 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout with the core
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Checkout Psiphon core (fork with udpgw support)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: CluvexStudio/psiphon-tunnel-core
           ref: shirokhorshid
@@ -298,12 +298,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout with the core
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Checkout Psiphon core (fork with udpgw support)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: CluvexStudio/psiphon-tunnel-core
           ref: shirokhorshid
