@@ -4,7 +4,8 @@
 
 ## رفتار اختصاصی
 
-- از Cloudflare WARP با هسته Aether استفاده می‌کند؛ Worker یا VPS لازم ندارد.
+- از هسته داخلی Psiphon در حالت Automatic استفاده می‌کند؛ Worker، کانفیگ یا
+  VPS لازم ندارد و انتخاب قبلی WARP را نادیده می‌گیرد.
 - در سطح `VpnService` فقط `com.instagram.android` با
   `addAllowedApplication()` وارد تونل می‌شود.
 - سایر برنامه‌ها و خود کلاینت از اینترنت عادی استفاده می‌کنند.
