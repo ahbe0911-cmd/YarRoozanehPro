@@ -1,0 +1,404 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+    paths-ignore:
+      - "**.md"
+      - "Docs/**"
+      - "LICENSE"
+  pull_request:
+    branches: ["main"]
+    paths-ignore:
+      - "**.md"
+      - "Docs/**"
+      - "LICENSE"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: "3.44.3"
+  PSIPHON_REF: shirokhorshid
+  GO_VERSION: "1.26"
+  GOMOBILE_VERSION: v0.0.0-20260821190718-4776eadac327
+
+jobs:
+  analyze:
+    name: Analyze and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/oblivion_core/target
+          key: ci-bridge-${{ hashFiles('native/oblivion_core/Cargo.lock') }}
+          restore-keys: ci-bridge-
+
+      - name: Fetch dependencies
+        run: flutter pub get
+
+      - name: Analyze the dart sources
+        run: flutter analyze
+
+      - name: Run the dart tests
+        run: |
+          if ls test/*_test.dart >/dev/null 2>&1; then
+            flutter test
+          else
+            echo "there are no dart tests to run"
+          fi
+
+      - name: Run the ffi bridge tests
+        working-directory: native/oblivion_core
+        run: cargo test
+
+  android:
+    name: Android debug
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with the core and hev-socks5-tunnel
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Checkout Psiphon core (fork with udpgw support)
+        uses: actions/checkout@v6
+        with:
+          repository: CluvexStudio/psiphon-tunnel-core
+          ref: ${{ env.PSIPHON_REF }}
+          path: psiphon-temp
+
+      - name: Move Psiphon to correct location for Android build
+        id: psiphon
+        run: |
+          mv psiphon-temp ../psiphon-tunnel-core
+          sha=$(git -C ../psiphon-tunnel-core rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "psiphon fork at $sha"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: "17"
+          distribution: "zulu"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Set up Rust with the Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            aetherproject/aether/target
+          key: ci-cargo-android-${{ hashFiles('aetherproject/aether/Cargo.lock') }}
+          restore-keys: ci-cargo-android-
+
+      - name: Install the NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          link-to-sdk: true
+
+      - name: Pin both modules to the NDK that was installed
+        run: |
+          version=$(basename "$(ls -d "$ANDROID_HOME"/ndk/*/ | head -1)")
+          echo "ANDROID_NDK_VERSION=$version" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$version" >> "$GITHUB_ENV"
+          echo "using ndk $version"
+
+      - name: Cache the psiphon library
+        id: psiphon-aar
+        uses: actions/cache@v6
+        with:
+          path: android/psiphon/ca.psiphon.aar
+          key: psiphon-aar-arm64-${{ steps.psiphon.outputs.sha }}-api35-16kb
+
+      - name: Set up Go
+        if: steps.psiphon-aar.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Build the psiphon library
+        if: steps.psiphon-aar.outputs.cache-hit != 'true'
+        env:
+          PSIPHON_TARGETS: android/arm64
+        run: tools/build-psiphon-aar.sh
+
+      - name: Build
+        run: |
+          flutter pub get
+          flutter build apk --debug --target-platform android-arm64
+
+      - name: Check that both cores rode along
+        run: |
+          apk=build/app/outputs/flutter-apk/app-debug.apk
+          missing=0
+          for library in libaether.so libgojni.so; do
+            if ! unzip -l "$apk" | grep -q "lib/arm64-v8a/$library"; then
+              echo "::error::the apk carries no $library"
+              missing=1
+            fi
+          done
+          if [ "$missing" != 0 ]; then
+            unzip -l "$apk" | grep 'lib/' || true
+            exit 1
+          fi
+          echo "the aether and psiphon cores are inside the apk"
+
+      - name: Check the native libraries are 16 KB aligned
+        run: |
+          apk=build/app/outputs/flutter-apk/app-debug.apk
+          workdir=$(mktemp -d)
+          unzip -qo "$apk" -d "$workdir" 'lib/arm64-v8a/*'
+          readelf=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-readelf | head -1)
+          failed=0
+          for library in "$workdir"/lib/arm64-v8a/libaether.so \
+                         "$workdir"/lib/arm64-v8a/libgojni.so \
+                         "$workdir"/lib/arm64-v8a/libhev-socks5-tunnel.so; do
+            [ -f "$library" ] || continue
+            alignments=$("$readelf" -lW "$library" | awk '$1=="LOAD"{print $NF}' | sort -u | tr '\n' ' ')
+            case "$alignments" in
+              "0x4000 "|"0x10000 ")
+                echo "$(basename "$library"): $alignments ok" ;;
+              *)
+                echo "::error::$(basename "$library") is not 16 KB aligned: $alignments"
+                failed=1 ;;
+            esac
+          done
+          exit $failed
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: oblivion-android-arm64-debug
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          retention-days: 14
+
+  linux:
+    name: Linux debug
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout with the core
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Checkout Psiphon core (fork with udpgw support)
+        uses: actions/checkout@v6
+        with:
+          repository: CluvexStudio/psiphon-tunnel-core
+          ref: shirokhorshid
+          path: psiphon-temp
+
+      - name: Move Psiphon to correct location for CMake
+        run: mv psiphon-temp ../psiphon-tunnel-core
+
+      - name: Set up Go for Psiphon build
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Install the build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config make gcc \
+            libgtk-3-dev liblzma-dev libayatana-appindicator3-dev
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            aetherproject/aether/target
+            native/oblivion_core/target
+          key: ci-cargo-linux-${{ hashFiles('aetherproject/aether/Cargo.lock') }}
+          restore-keys: ci-cargo-linux-
+
+      - name: Build
+        env:
+          OBLIVION_REQUIRE_HEV: "1"
+        run: |
+          flutter pub get
+          flutter build linux --debug
+
+      - name: Check that the native pieces were bundled
+        run: |
+          bundle=build/linux/x64/debug/bundle
+          missing=0
+          for artefact in oblivion aether lib/liboblivion_core.so; do
+            if [ ! -e "$bundle/$artefact" ]; then
+              echo "::error::$artefact is missing from the bundle"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "the app, the core and the bridge are all bundled"
+
+      - name: Check that tunnel mode is embedded
+        run: |
+          lib=build/linux/x64/debug/bundle/lib/liboblivion_core.so
+          for symbol in hev_socks5_tunnel_main_from_str hev_socks5_tunnel_quit \
+                        hev_socks5_tunnel_stats; do
+            if ! nm -a "$lib" | grep -q " $symbol\$"; then
+              echo "::error::$symbol is not linked, the app would be proxy only"
+              exit 1
+            fi
+          done
+          echo "hev-socks5-tunnel is linked, tunnel mode is available"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: oblivion-linux-x64-debug
+          path: build/linux/x64/debug/bundle
+          retention-days: 14
+
+  windows:
+    name: Windows debug
+    runs-on: windows-latest
+    steps:
+      - name: Checkout with the core
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Checkout Psiphon core (fork with udpgw support)
+        uses: actions/checkout@v6
+        with:
+          repository: CluvexStudio/psiphon-tunnel-core
+          ref: shirokhorshid
+          path: psiphon-temp
+
+      - name: Move Psiphon to correct location for CMake
+        run: mv psiphon-temp ../psiphon-tunnel-core
+
+      - name: Set up Go for Psiphon build
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install NASM, needed to build BoringSSL
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress -y
+          $nasm = Join-Path $env:ProgramFiles 'NASM'
+          if (-not (Test-Path (Join-Path $nasm 'nasm.exe'))) {
+            Write-Error "nasm.exe was not installed under $nasm"
+            exit 1
+          }
+          $nasm | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & (Join-Path $nasm 'nasm.exe') -v
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            aetherproject/aether/target
+            native/oblivion_core/target
+          key: ci-cargo-windows-${{ hashFiles('aetherproject/aether/Cargo.lock') }}
+          restore-keys: ci-cargo-windows-
+
+      - name: Set up MSYS2 to build the tunnel helper
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: gcc make
+
+      - name: Build the tunnel helper
+        shell: msys2 {0}
+        run: |
+          set -e
+          root=$(cygpath "$GITHUB_WORKSPACE")
+          dest="$root/windows/hevtun"
+          mkdir -p "$dest"
+          cd "$root/android/aether-vpn/src/main/jni/hev-socks5-tunnel"
+          make -j"$(nproc)" CFLAGS=-Wno-error
+          cp bin/hev-socks5-tunnel.exe "$dest/"
+          cp third-part/wintun/bin/wintun.dll "$dest/"
+          ldd bin/hev-socks5-tunnel.exe | awk '/msys/ {print $3}' | while read -r dll; do
+            cp "$dll" "$dest/"
+          done
+          ls -la "$dest"
+
+      - name: Build
+        run: |
+          flutter pub get
+          flutter build windows --debug
+
+      - name: Check that the native pieces were bundled
+        shell: pwsh
+        run: |
+          $runner = "build/windows/x64/runner/Debug"
+          $missing = $false
+          foreach ($artefact in @("oblivion.exe", "aether.exe", "oblivion_core.dll",
+                                  "hev-socks5-tunnel.exe", "wintun.dll")) {
+            if (-not (Test-Path "$runner/$artefact")) {
+              Write-Output "::error::$artefact is missing from the runner directory"
+              $missing = $true
+            }
+          }
+          if (-not (Get-ChildItem "$runner/msys-*.dll" -ErrorAction SilentlyContinue)) {
+            Write-Output "::error::the msys runtime the helper needs is missing"
+            $missing = $true
+          }
+          if ($missing) { Get-ChildItem $runner; exit 1 }
+          Write-Output "the app, the core, the bridge and the tunnel helper are bundled"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: oblivion-windows-x64-debug
+          path: build/windows/x64/runner/Debug
+          retention-days: 14

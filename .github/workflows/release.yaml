@@ -1,0 +1,459 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: "3.44.3"
+  PSIPHON_REF: shirokhorshid
+  GO_VERSION: "1.26"
+  GOMOBILE_VERSION: v0.0.0-20260821190718-4776eadac327
+
+jobs:
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with the core and hev-socks5-tunnel
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Checkout Psiphon core (fork with udpgw support)
+        uses: actions/checkout@v6
+        with:
+          repository: CluvexStudio/psiphon-tunnel-core
+          ref: ${{ env.PSIPHON_REF }}
+          path: psiphon-temp
+
+      - name: Move Psiphon to correct location for Android build
+        id: psiphon
+        run: |
+          mv psiphon-temp ../psiphon-tunnel-core
+          sha=$(git -C ../psiphon-tunnel-core rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "psiphon fork at $sha"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: "17"
+          distribution: "zulu"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Set up Rust with the Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            aetherproject/aether/target
+          key: cargo-android-${{ hashFiles('aetherproject/aether/Cargo.lock') }}
+          restore-keys: cargo-android-
+
+      - name: Install the NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          link-to-sdk: true
+
+      - name: Pin both modules to the NDK that was installed
+        run: |
+          version=$(basename "$(ls -d "$ANDROID_HOME"/ndk/*/ | head -1)")
+          echo "ANDROID_NDK_VERSION=$version" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$version" >> "$GITHUB_ENV"
+          echo "using ndk $version"
+
+      - name: Restore the signing key
+        working-directory: android
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::no signing key configured, falling back to the debug key"
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > oblivion-release.jks
+          {
+            echo "storeFile=oblivion-release.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > key.properties
+
+      - name: Cache the psiphon library
+        id: psiphon-aar
+        uses: actions/cache@v6
+        with:
+          path: android/psiphon/ca.psiphon.aar
+          key: psiphon-aar-release-${{ steps.psiphon.outputs.sha }}-api35-16kb
+
+      - name: Set up Go
+        if: steps.psiphon-aar.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Build the psiphon library
+        if: steps.psiphon-aar.outputs.cache-hit != 'true'
+        env:
+          PSIPHON_TARGETS: android/arm64,android/arm,android/amd64
+        run: tools/build-psiphon-aar.sh
+
+      - name: Fetch dependencies
+        run: flutter pub get
+
+      - name: Build the per ABI APKs
+        run: flutter build apk --release --split-per-abi
+
+      - name: Build the universal APK
+        run: flutter build apk --release
+
+      - name: Check that both cores rode along
+        run: |
+          failed=0
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            apk="build/app/outputs/flutter-apk/app-$abi-release.apk"
+            for library in libaether.so libgojni.so; do
+              if ! unzip -l "$apk" | grep -q "lib/$abi/$library"; then
+                echo "::error::$abi apk carries no $library"
+                failed=1
+              fi
+            done
+          done
+          exit $failed
+
+      - name: Collect the APKs
+        run: |
+          mkdir -p dist
+          out=build/app/outputs/flutter-apk
+          cp "$out/app-release.apk"             dist/instagram-smart-connect-universal.apk
+          cp "$out/app-arm64-v8a-release.apk"   dist/instagram-smart-connect-arm64-v8a.apk
+          cp "$out/app-armeabi-v7a-release.apk" dist/instagram-smart-connect-armeabi-v7a.apk
+          cp "$out/app-x86_64-release.apk"      dist/instagram-smart-connect-x86_64.apk
+          ls -la dist
+
+      - name: Report which key signed the APKs
+        run: |
+          signer=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          for apk in dist/*.apk; do
+            echo "== $apk"
+            "$signer" verify --print-certs "$apk" | grep -E "certificate DN|SHA-256 digest" || true
+          done
+
+      - name: Drop the signing key
+        if: always()
+        working-directory: android
+        run: rm -f oblivion-release.jks key.properties
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: instagram-smart-connect-universal
+          path: dist/instagram-smart-connect-universal.apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: instagram-smart-connect-arm64-v8a
+          path: dist/instagram-smart-connect-arm64-v8a.apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: instagram-smart-connect-armeabi-v7a
+          path: dist/instagram-smart-connect-armeabi-v7a.apk
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: instagram-smart-connect-x86_64
+          path: dist/instagram-smart-connect-x86_64.apk
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - name: Checkout with the core
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Checkout Psiphon core (fork with udpgw support)
+        uses: actions/checkout@v6
+        with:
+          repository: CluvexStudio/psiphon-tunnel-core
+          ref: shirokhorshid
+          path: psiphon-temp
+
+      - name: Move Psiphon to correct location for CMake
+        run: mv psiphon-temp ../psiphon-tunnel-core
+
+      - name: Set up Go for Psiphon build
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Install the build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config make gcc \
+            libgtk-3-dev liblzma-dev libayatana-appindicator3-dev
+
+      - name: Set up Flutter
+        if: matrix.arch == 'x64'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Set up Flutter from git
+        if: matrix.arch == 'arm64'
+        run: |
+          git clone --single-branch -b "${FLUTTER_VERSION}" \
+            https://github.com/flutter/flutter.git "$HOME/flutter"
+          echo "$HOME/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Report the toolchain
+        run: flutter --version
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            aetherproject/aether/target
+          key: cargo-linux-${{ matrix.arch }}-${{ hashFiles('aetherproject/aether/Cargo.lock') }}
+          restore-keys: cargo-linux-${{ matrix.arch }}-
+
+      - name: Build
+        env:
+          OBLIVION_REQUIRE_HEV: "1"
+        run: |
+          flutter pub get
+          flutter build linux --release
+
+      - name: Check that tunnel mode is embedded
+        run: |
+          lib="build/linux/${{ matrix.arch }}/release/bundle/lib/liboblivion_core.so"
+          if ! grep -qa HevSocks5ClientTCP "$lib"; then
+            echo "::error::the bridge carries no tunnel device, the release would be proxy only"
+            exit 1
+          fi
+          echo "hev-socks5-tunnel is linked, tunnel mode is available"
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          release="build/linux/${{ matrix.arch }}/release"
+          mv "$release/bundle" "$release/oblivion"
+          tar -C "$release" -czf "dist/oblivion-linux-${{ matrix.arch }}.tar.gz" oblivion
+          echo "the archive holds:"
+          tar -tzf "dist/oblivion-linux-${{ matrix.arch }}.tar.gz" | head -5
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: oblivion-linux-${{ matrix.arch }}
+          path: dist/*.tar.gz
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.arch == 'arm64' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    steps:
+      - name: Checkout with the core
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Checkout Psiphon core (fork with udpgw support)
+        uses: actions/checkout@v6
+        with:
+          repository: CluvexStudio/psiphon-tunnel-core
+          ref: shirokhorshid
+          path: psiphon-temp
+
+      - name: Move Psiphon to correct location for CMake
+        run: mv psiphon-temp ../psiphon-tunnel-core
+
+      - name: Set up Go for Psiphon build
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Set up Flutter
+        if: matrix.arch == 'x64'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Set up Flutter from git
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          git clone --single-branch -b "$env:FLUTTER_VERSION" `
+            https://github.com/flutter/flutter.git "$env:USERPROFILE\flutter"
+          "$env:USERPROFILE\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Report the toolchain
+        run: flutter --version
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install NASM, needed to build BoringSSL
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress -y
+          $nasm = Join-Path $env:ProgramFiles 'NASM'
+          if (-not (Test-Path (Join-Path $nasm 'nasm.exe'))) {
+            Write-Error "nasm.exe was not installed under $nasm"
+            exit 1
+          }
+          $nasm | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & (Join-Path $nasm 'nasm.exe') -v
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            aetherproject/aether/target
+          key: cargo-windows-${{ matrix.arch }}-${{ hashFiles('aetherproject/aether/Cargo.lock') }}
+          restore-keys: cargo-windows-${{ matrix.arch }}-
+
+      - name: Set up MSYS2 to build the tunnel helper
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          install: gcc make
+
+      - name: Build the tunnel helper
+        shell: msys2 {0}
+        run: |
+          set -e
+          root=$(cygpath "$GITHUB_WORKSPACE")
+          dest="$root/windows/hevtun"
+          mkdir -p "$dest"
+          cd "$root/android/aether-vpn/src/main/jni/hev-socks5-tunnel"
+          make -j"$(nproc)" CFLAGS=-Wno-error
+          cp bin/hev-socks5-tunnel.exe "$dest/"
+          cp third-part/wintun/bin/wintun.dll "$dest/"
+          ldd bin/hev-socks5-tunnel.exe | awk '/msys/ {print $3}' | while read -r dll; do
+            cp "$dll" "$dest/"
+          done
+          ls -la "$dest"
+
+      - name: Build
+        run: |
+          flutter pub get
+          flutter build windows --release
+
+      - name: Check that the tunnel helper shipped
+        shell: pwsh
+        run: |
+          $runner = "build/windows/${{ matrix.arch }}/runner/Release"
+          foreach ($artefact in @("hev-socks5-tunnel.exe", "wintun.dll")) {
+            if (-not (Test-Path "$runner/$artefact")) {
+              Write-Output "::error::$artefact is missing, the release would be proxy only"
+              exit 1
+            }
+          }
+          if (-not (Get-ChildItem "$runner/msys-*.dll" -ErrorAction SilentlyContinue)) {
+            Write-Output "::error::the msys runtime the helper needs is missing"
+            exit 1
+          }
+          Write-Output "the tunnel helper shipped, tunnel mode is available"
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $staging = "staging/oblivion"
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item -Recurse -Force `
+            -Path "build/windows/${{ matrix.arch }}/runner/Release/*" -Destination $staging
+          Compress-Archive -Path $staging `
+                           -DestinationPath "dist/oblivion-windows-${{ matrix.arch }}.zip"
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: oblivion-windows-${{ matrix.arch }}
+          path: dist/*.zip
+
+  release:
+    name: Publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [android, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Lay out the assets and stamp them with the version
+        run: |
+          mkdir -p dist
+          find artifacts -type f \( -name '*.apk' -o -name '*.tar.gz' -o -name '*.zip' \) \
+            -exec cp {} dist/ \;
+          cd dist
+          for file in oblivion-*; do
+            mv "$file" "${file/oblivion-/oblivion-${GITHUB_REF_NAME}-}"
+          done
+          sha256sum * > SHA256SUMS.txt
+          ls -la
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "${{ github.ref_name }} #یوسف_قبادی"
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: false
+          files: dist/*
+          body: |
+            بازنویسی برنامه و تغییر هسته به Aether
+
+            Rewritten app, the core is now Aether.
