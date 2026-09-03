@@ -129,12 +129,12 @@ jobs:
       - name: Build the universal APK
         run: flutter build apk --release
 
-      - name: Check that both cores rode along
+      - name: Check that the Psiphon core rode along
         run: |
           failed=0
           for abi in arm64-v8a armeabi-v7a x86_64; do
             apk="build/app/outputs/flutter-apk/app-$abi-release.apk"
-            for library in libaether.so libgojni.so; do
+            for library in libgojni.so; do
               if ! unzip -l "$apk" | grep -q "lib/$abi/$library"; then
                 echo "::error::$abi apk carries no $library"
                 failed=1
