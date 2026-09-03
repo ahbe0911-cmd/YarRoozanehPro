@@ -3,6 +3,10 @@ package ir.ahbe.instaclient
 import android.annotation.SuppressLint
 import android.os.Bundle
 import android.view.View
+import android.view.Gravity
+import android.view.inputmethod.InputMethodManager
+import android.content.Context
+import android.text.InputType
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -12,6 +16,7 @@ import android.widget.EditText
 import android.widget.Button
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.LinearLayout
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.webkit.ProxyConfig
@@ -66,19 +71,41 @@ class MainActivity : AppCompatActivity() {
     private fun requestConfig() {
         val input = EditText(this).apply {
             hint = "کانفیگ JSON را اینجا Paste کنید"
-            minLines = 8
+            minLines = 5
+            maxLines = 7
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            isVerticalScrollBarEnabled = true
+            gravity = Gravity.TOP or Gravity.START
+            typeface = resources.getFont(R.font.vazirmatn_regular)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (210 * resources.displayMetrics.density).toInt()
+            )
             setPadding(36, 24, 36, 24)
         }
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("راه‌اندازی اتصال امن")
             .setMessage("کانفیگ فقط در حافظه خصوصی گوشی نگهداری می‌شود و در هیچ گزارشی چاپ نخواهد شد.")
             .setView(input)
             .setCancelable(false)
-            .setPositiveButton("ذخیره و اتصال") { _, _ ->
+            .setPositiveButton("ذخیره و اتصال", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val value = input.text.toString().trim()
+                if (value.isBlank()) {
+                    input.error = "ابتدا کانفیگ را الصاق کنید"
+                    return@setOnClickListener
+                }
                 getSharedPreferences("local", MODE_PRIVATE).edit().putString("outbound", value).apply()
+                (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                    .hideSoftInputFromWindow(input.windowToken, 0)
+                dialog.dismiss()
                 connect(value)
-            }.show()
+            }
+        }
+        dialog.show()
     }
 
     private fun connect(config: String) {

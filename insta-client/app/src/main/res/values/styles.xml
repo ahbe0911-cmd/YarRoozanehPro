@@ -1,6 +1,7 @@
 <resources>
     <style name="Theme.InstaClient" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="android:fontFamily">sans</item>
+        <item name="android:fontFamily">@font/vazirmatn</item>
+        <item name="fontFamily">@font/vazirmatn</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:statusBarColor">@color/ink</item>
         <item name="colorPrimary">@color/pink</item>
