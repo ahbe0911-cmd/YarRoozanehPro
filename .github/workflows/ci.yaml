@@ -160,11 +160,11 @@ jobs:
           flutter pub get
           flutter build apk --debug --target-platform android-arm64
 
-      - name: Check that both cores rode along
+      - name: Check that the Psiphon core rode along
         run: |
           apk=build/app/outputs/flutter-apk/app-debug.apk
           missing=0
-          for library in libaether.so libgojni.so; do
+          for library in libgojni.so; do
             if ! unzip -l "$apk" | grep -q "lib/arm64-v8a/$library"; then
               echo "::error::the apk carries no $library"
               missing=1
@@ -174,7 +174,7 @@ jobs:
             unzip -l "$apk" | grep 'lib/' || true
             exit 1
           fi
-          echo "the aether and psiphon cores are inside the apk"
+          echo "the psiphon core is inside the apk"
 
       - name: Check the native libraries are 16 KB aligned
         run: |
@@ -183,8 +183,7 @@ jobs:
           unzip -qo "$apk" -d "$workdir" 'lib/arm64-v8a/*'
           readelf=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-readelf | head -1)
           failed=0
-          for library in "$workdir"/lib/arm64-v8a/libaether.so \
-                         "$workdir"/lib/arm64-v8a/libgojni.so \
+          for library in "$workdir"/lib/arm64-v8a/libgojni.so \
                          "$workdir"/lib/arm64-v8a/libhev-socks5-tunnel.so; do
             [ -f "$library" ] || continue
             alignments=$("$readelf" -lW "$library" | awk '$1=="LOAD"{print $NF}' | sort -u | tr '\n' ' ')
