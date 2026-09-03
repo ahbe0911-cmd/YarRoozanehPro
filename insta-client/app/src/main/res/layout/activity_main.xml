@@ -22,15 +22,15 @@
 
     <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
         android:background="@android:color/white" android:gravity="center" android:orientation="horizontal">
-        <Button android:id="@+id/home" style="?attr/materialButtonTextButtonStyle"
+        <Button android:id="@+id/home" android:background="@android:color/transparent"
             android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="خانه" />
-        <Button android:id="@+id/explore" style="?attr/materialButtonTextButtonStyle"
+        <Button android:id="@+id/explore" android:background="@android:color/transparent"
             android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="جست‌وجو" />
-        <Button android:id="@+id/reels" style="?attr/materialButtonTextButtonStyle"
+        <Button android:id="@+id/reels" android:background="@android:color/transparent"
             android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="ریلز" />
-        <Button android:id="@+id/direct" style="?attr/materialButtonTextButtonStyle"
+        <Button android:id="@+id/direct" android:background="@android:color/transparent"
             android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="دایرکت" />
-        <Button android:id="@+id/profile" style="?attr/materialButtonTextButtonStyle"
+        <Button android:id="@+id/profile" android:background="@android:color/transparent"
             android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="پروفایل" />
     </LinearLayout>
 </LinearLayout>
