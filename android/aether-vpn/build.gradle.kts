@@ -277,5 +277,5 @@ val buildAetherCore by tasks.registering {
 }
 
 
-tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
-    .configureEach { dependsOn(buildAetherCore) }
+// This Instagram-only variant always runs the embedded Psiphon core. The
+// legacy Aether executable is unused, so do not cross-compile it for Android.
