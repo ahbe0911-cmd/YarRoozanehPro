@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@color/paper">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="58dp"
+        android:gravity="center_vertical" android:paddingHorizontal="16dp"
+        android:background="@color/ink" android:orientation="horizontal">
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+            android:layout_weight="1" android:text="اینستا همراه" android:textColor="@android:color/white"
+            android:textSize="19sp" android:textStyle="bold" />
+        <TextView android:id="@+id/status" android:layout_width="wrap_content"
+            android:layout_height="wrap_content" android:background="@drawable/status_pill"
+            android:text="در حال اتصال…" android:textColor="@android:color/white" android:textSize="12sp" />
+    </LinearLayout>
+
+    <ProgressBar android:id="@+id/progress" style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent" android:layout_height="3dp" android:max="100" />
+
+    <WebView android:id="@+id/web" android:layout_width="match_parent"
+        android:layout_height="0dp" android:layout_weight="1" />
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
+        android:background="@android:color/white" android:gravity="center" android:orientation="horizontal">
+        <Button android:id="@+id/home" style="?attr/materialButtonTextButtonStyle"
+            android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="خانه" />
+        <Button android:id="@+id/explore" style="?attr/materialButtonTextButtonStyle"
+            android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="جست‌وجو" />
+        <Button android:id="@+id/reels" style="?attr/materialButtonTextButtonStyle"
+            android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="ریلز" />
+        <Button android:id="@+id/direct" style="?attr/materialButtonTextButtonStyle"
+            android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="دایرکت" />
+        <Button android:id="@+id/profile" style="?attr/materialButtonTextButtonStyle"
+            android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="پروفایل" />
+    </LinearLayout>
+</LinearLayout>
